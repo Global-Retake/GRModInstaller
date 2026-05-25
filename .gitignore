@@ -1,0 +1,10 @@
+bin/
+obj/
+publish/
+artifacts/
+src/**/bin/
+src/**/obj/
+*.user
+*.suo
+*.pdb
+.vs/
