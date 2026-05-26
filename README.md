@@ -125,7 +125,7 @@ Arabic, Bulgarian, Catalan, Chinese Simplified, Chinese Traditional, Croatian, C
 
 Join the official Discord server:
 
-[![Discord](https://img.shields.io/discord/1378340393306028083?style=for-the-badge&logo=discord&color=5865F2)](https://discord.gg/zawBAWuYEg)
+[![Discord](https://img.shields.io/discord/1436143382723297350?cacheSeconds=60&style=for-the-badge&logo=discord&color=5865F2)](https://discord.gg/zawBAWuYEg)
 
 ## Credits
 
