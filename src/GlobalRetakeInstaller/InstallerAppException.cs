@@ -4,7 +4,9 @@ public enum InstallerErrorKind
 {
     InvalidArchivePath,
     GitHubEmptyPayload,
-    GitHubMissingAssets
+    GitHubMissingAssets,
+    InvalidInstallState,
+    InvalidInstallStatePath
 }
 
 public sealed class InstallerAppException : Exception

@@ -9,9 +9,11 @@ namespace GRModInstaller;
 public sealed class MainForm : Form
 {
     private const string DefaultInstallPath = @"C:\Program Files (x86)\Steam\steamapps\common\csgo legacy";
+    private static readonly string InstallerTempBasePath = Path.Combine(Path.GetTempPath(), "GlobalRetakeInstaller");
 
     private readonly HttpClient _httpClient = CreateHttpClient();
     private readonly ReleaseService _releaseService;
+    private readonly DefenderExclusionService _defenderExclusionService = new();
 
     private readonly Label _titleLabel;
     private readonly Label _introLabel;
@@ -30,6 +32,7 @@ public sealed class MainForm : Form
     private readonly Button _browseButton;
     private readonly Button _refreshButton;
     private readonly Button _installButton;
+    private readonly Button _uninstallButton;
     private readonly Button _exitButton;
     private readonly ProgressBar _progressBar;
     private readonly Label _statusLabel;
@@ -186,23 +189,31 @@ public sealed class MainForm : Form
 
         _refreshButton = new Button
         {
-            Location = new Point(344, 434),
-            Size = new Size(94, 27)
+            Location = new Point(306, 434),
+            Size = new Size(82, 27)
         };
         _refreshButton.Click += RefreshButton_Click;
 
         _installButton = new Button
         {
-            Location = new Point(454, 434),
-            Size = new Size(94, 27),
+            Location = new Point(398, 434),
+            Size = new Size(82, 27),
             Enabled = false
         };
         _installButton.Click += InstallButton_Click;
 
+        _uninstallButton = new Button
+        {
+            Location = new Point(490, 434),
+            Size = new Size(82, 27),
+            Enabled = false
+        };
+        _uninstallButton.Click += UninstallButton_Click;
+
         _exitButton = new Button
         {
-            Location = new Point(570, 434),
-            Size = new Size(94, 27)
+            Location = new Point(582, 434),
+            Size = new Size(82, 27)
         };
         _exitButton.Click += (_, _) => Close();
 
@@ -217,6 +228,7 @@ public sealed class MainForm : Form
         Controls.Add(_statusLabel);
         Controls.Add(_refreshButton);
         Controls.Add(_installButton);
+        Controls.Add(_uninstallButton);
         Controls.Add(_exitButton);
 
         PopulateLanguageList();
@@ -257,6 +269,11 @@ public sealed class MainForm : Form
     private async void InstallButton_Click(object? sender, EventArgs e)
     {
         await RunInstallAsync();
+    }
+
+    private async void UninstallButton_Click(object? sender, EventArgs e)
+    {
+        await RunUninstallAsync();
     }
 
     private async Task LoadLatestReleaseAsync(bool showDialogOnError)
@@ -318,21 +335,41 @@ public sealed class MainForm : Form
         }
 
         var selectedAsset = _currentRelease.GetAsset(SelectedMode);
-        var installPath = Path.GetFullPath(_pathTextBox.Text.Trim());
-        var tempRoot = Path.Combine(Path.GetTempPath(), "GlobalRetakeInstaller", Guid.NewGuid().ToString("N"));
-        var archivePath = Path.Combine(tempRoot, selectedAsset.Name);
+        var rollbackExclusions = Array.Empty<string>();
+        string installPath;
+        string? tempRoot = null;
+        string? archivePath = null;
 
         try
         {
-            SetBusyState(true, TextId.StatusPreparingInstall, false, 0);
+            installPath = Path.GetFullPath(_pathTextBox.Text.Trim());
+            tempRoot = Path.Combine(InstallerTempBasePath, Guid.NewGuid().ToString("N"));
+            archivePath = Path.Combine(tempRoot, selectedAsset.Name);
 
+            SetBusyState(true, TextId.StatusPreparingInstall, true, 0);
+
+            Directory.CreateDirectory(InstallerTempBasePath);
             Directory.CreateDirectory(tempRoot);
             Directory.CreateDirectory(installPath);
 
+            SetStatus(TextId.StatusConfiguringExclusions, true, 0);
+            var managedExclusions = (await _defenderExclusionService
+                    .EnsureExcludedAsync([installPath, InstallerTempBasePath]))
+                .ToArray();
+            rollbackExclusions = managedExclusions
+                .Where(exclusion => exclusion.AddedByInstaller)
+                .Select(exclusion => exclusion.Path)
+                .ToArray();
+
+            var existingState = await InstallStateStore.TryLoadAsync(installPath);
             var progress = new Progress<InstallProgress>(UpdateProgress);
 
             await DownloadAssetAsync(selectedAsset, archivePath, progress);
-            await ExtractArchiveAsync(archivePath, installPath, progress);
+            var extractedContent = await ExtractArchiveAsync(archivePath, installPath, existingState, progress);
+
+            SetStatus(TextId.StatusSavingInstallState, true, 95);
+            var installState = BuildInstallState(installPath, existingState, _currentRelease.TagName, extractedContent, managedExclusions);
+            await InstallStateStore.SaveAsync(installPath, installState);
 
             SetBusyState(false, TextId.InstallCompleteStatus, false, 100);
 
@@ -345,6 +382,8 @@ public sealed class MainForm : Form
         }
         catch (Exception ex)
         {
+            await TryRollbackExclusionsAsync(rollbackExclusions);
+
             var errorMessage = GetErrorMessage(ex);
             SetBusyState(false, TextId.InstallFailedPrefix, false, _progressBar.Value, errorMessage);
 
@@ -357,7 +396,90 @@ public sealed class MainForm : Form
         }
         finally
         {
-            TryDeleteDirectory(tempRoot);
+            if (tempRoot is not null)
+            {
+                TryDeleteDirectory(tempRoot);
+            }
+            UpdateControlState();
+        }
+    }
+
+    private async Task RunUninstallAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_pathTextBox.Text))
+        {
+            MessageBox.Show(
+                this,
+                GetText(TextId.UninstallMissingStateMessage),
+                GetText(TextId.UninstallMissingStateTitle),
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+            return;
+        }
+
+        try
+        {
+            var installPath = Path.GetFullPath(_pathTextBox.Text.Trim());
+            var state = await InstallStateStore.TryLoadAsync(installPath);
+
+            if (state is null)
+            {
+                MessageBox.Show(
+                    this,
+                    GetText(TextId.UninstallMissingStateMessage),
+                    GetText(TextId.UninstallMissingStateTitle),
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+                return;
+            }
+
+            if (MessageBox.Show(
+                    this,
+                    Format(TextId.UninstallConfirmMessageFormat, installPath),
+                    GetText(TextId.UninstallConfirmTitle),
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Warning,
+                    MessageBoxDefaultButton.Button2) != DialogResult.Yes)
+            {
+                return;
+            }
+
+            SetBusyState(true, TextId.StatusPreparingUninstall, true, 0);
+
+            var progress = new Progress<InstallProgress>(UpdateProgress);
+            await RemoveInstalledContentAsync(installPath, state, progress);
+
+            SetStatus(TextId.StatusRemovingExclusions, true, 92);
+            await _defenderExclusionService.RemoveExclusionsAsync(
+                state.Exclusions
+                    .Where(exclusion => exclusion.AddedByInstaller)
+                    .Select(exclusion => exclusion.Path));
+
+            InstallStateStore.Delete(installPath);
+
+            SetBusyState(false, TextId.UninstallCompleteStatus, false, 100);
+
+            MessageBox.Show(
+                this,
+                Format(TextId.UninstallCompleteDialogFormat, installPath),
+                GetText(TextId.UninstallCompleteTitle),
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+        }
+        catch (Exception ex)
+        {
+            var errorMessage = GetErrorMessage(ex);
+            SetBusyState(false, TextId.UninstallFailedPrefix, false, _progressBar.Value, errorMessage);
+
+            MessageBox.Show(
+                this,
+                Format(TextId.UninstallFailedDialogFormat, errorMessage),
+                GetText(TextId.UninstallFailedTitle),
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
+        }
+        finally
+        {
             UpdateControlState();
         }
     }
@@ -399,6 +521,7 @@ public sealed class MainForm : Form
     {
         var hasPath = !string.IsNullOrWhiteSpace(_pathTextBox.Text);
         var canInstall = !_isBusy && hasPath && _currentRelease is not null;
+        var canUninstall = !_isBusy && hasPath && HasInstallStateForSelectedPath();
 
         _languageComboBox.Enabled = !_isBusy;
         _fullRadioButton.Enabled = !_isBusy;
@@ -407,7 +530,25 @@ public sealed class MainForm : Form
         _browseButton.Enabled = !_isBusy;
         _refreshButton.Enabled = !_isBusy;
         _installButton.Enabled = canInstall;
+        _uninstallButton.Enabled = canUninstall;
         _exitButton.Enabled = !_isBusy;
+    }
+
+    private bool HasInstallStateForSelectedPath()
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(_pathTextBox.Text))
+            {
+                return false;
+            }
+
+            return InstallStateStore.Exists(Path.GetFullPath(_pathTextBox.Text.Trim()));
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private async Task DownloadAssetAsync(ReleaseAsset asset, string destinationPath, IProgress<InstallProgress> progress, CancellationToken cancellationToken = default)
@@ -456,44 +597,135 @@ public sealed class MainForm : Form
         progress.Report(new InstallProgress(80, false, TextId.StatusDownloadComplete));
     }
 
-    private static Task ExtractArchiveAsync(string archivePath, string installPath, IProgress<InstallProgress> progress, CancellationToken cancellationToken = default)
+    private static Task<ExtractedContent> ExtractArchiveAsync(string archivePath, string installPath, InstallState? existingState, IProgress<InstallProgress> progress, CancellationToken cancellationToken = default)
     {
         return Task.Run(() =>
         {
             using var archive = ZipFile.OpenRead(archivePath);
             var totalEntries = Math.Max(archive.Entries.Count, 1);
             var installRoot = EnsureTrailingSeparator(Path.GetFullPath(installPath));
+            var extractedFiles = new List<string>();
+            var extractedDirectories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var backedUpFiles = new List<BackedUpFile>();
+            var trackedBackups = new HashSet<string>(
+                existingState?.BackedUpFiles?.Select(entry => NormalizeRelativeStatePath(entry.OriginalRelativePath)) ?? [],
+                StringComparer.OrdinalIgnoreCase);
 
-            for (var index = 0; index < archive.Entries.Count; index++)
+            try
+            {
+                for (var index = 0; index < archive.Entries.Count; index++)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    var entry = archive.Entries[index];
+                    var destinationPath = Path.GetFullPath(Path.Combine(installRoot, entry.FullName));
+                    var relativeEntryPath = NormalizeRelativeStatePath(Path.GetRelativePath(installPath, destinationPath));
+
+                    if (!destinationPath.StartsWith(installRoot, StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new InstallerAppException(InstallerErrorKind.InvalidArchivePath);
+                    }
+
+                    if (string.IsNullOrEmpty(entry.Name))
+                    {
+                        Directory.CreateDirectory(destinationPath);
+                        AddTrackedDirectory(extractedDirectories, installPath, destinationPath);
+                    }
+                    else
+                    {
+                        var destinationDirectory = Path.GetDirectoryName(destinationPath);
+
+                        if (!string.IsNullOrWhiteSpace(destinationDirectory))
+                        {
+                            Directory.CreateDirectory(destinationDirectory);
+                            AddTrackedDirectory(extractedDirectories, installPath, destinationDirectory);
+                        }
+
+                        BackupOriginalLauncherIfNeeded(installPath, relativeEntryPath, destinationPath, trackedBackups, backedUpFiles);
+                        entry.ExtractToFile(destinationPath, overwrite: true);
+                        extractedFiles.Add(destinationPath);
+                    }
+
+                    var percent = 80d + ((index + 1) / (double)totalEntries * 20d);
+                    progress.Report(new InstallProgress(percent, false, TextId.StatusExtractingFormat, index + 1, totalEntries));
+                }
+
+                return new ExtractedContent(extractedFiles, extractedDirectories.ToArray(), backedUpFiles);
+            }
+            catch
+            {
+                foreach (var backedUpFile in backedUpFiles)
+                {
+                    TryRestoreBackedUpFile(installRoot, backedUpFile);
+                }
+
+                throw;
+            }
+        }, cancellationToken);
+    }
+
+    private static Task RemoveInstalledContentAsync(string installPath, InstallState state, IProgress<InstallProgress> progress, CancellationToken cancellationToken = default)
+    {
+        return Task.Run(() =>
+        {
+            var installRoot = EnsureTrailingSeparator(Path.GetFullPath(installPath));
+            var filePaths = state.InstalledFiles
+                .Select(relativePath => ResolveTrackedPath(installRoot, relativePath))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+
+            var directoryPaths = CollectDirectoryPaths(state, installRoot);
+            var backedUpFiles = state.BackedUpFiles ?? [];
+            var totalSteps = Math.Max(filePaths.Length + backedUpFiles.Count + directoryPaths.Count, 1);
+            var completedSteps = 0;
+
+            foreach (var filePath in filePaths)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                TryDeleteFile(filePath);
+                completedSteps++;
+
+                progress.Report(new InstallProgress(
+                    completedSteps / (double)totalSteps * 90d,
+                    false,
+                    TextId.StatusRemovingInstalledFilesFormat,
+                    completedSteps,
+                    totalSteps));
+            }
+
+            foreach (var backedUpFile in backedUpFiles)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                RestoreBackedUpFile(installRoot, backedUpFile);
+                completedSteps++;
+
+                progress.Report(new InstallProgress(
+                    completedSteps / (double)totalSteps * 90d,
+                    false,
+                    TextId.StatusRemovingInstalledFilesFormat,
+                    completedSteps,
+                    totalSteps));
+            }
+
+            foreach (var directoryPath in directoryPaths)
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                var entry = archive.Entries[index];
-                var destinationPath = Path.GetFullPath(Path.Combine(installRoot, entry.FullName));
-
-                if (!destinationPath.StartsWith(installRoot, StringComparison.OrdinalIgnoreCase))
+                if (Directory.Exists(directoryPath) &&
+                    !Directory.EnumerateFileSystemEntries(directoryPath).Any())
                 {
-                    throw new InstallerAppException(InstallerErrorKind.InvalidArchivePath);
+                    Directory.Delete(directoryPath, recursive: false);
                 }
 
-                if (string.IsNullOrEmpty(entry.Name))
-                {
-                    Directory.CreateDirectory(destinationPath);
-                }
-                else
-                {
-                    var destinationDirectory = Path.GetDirectoryName(destinationPath);
+                completedSteps++;
 
-                    if (!string.IsNullOrWhiteSpace(destinationDirectory))
-                    {
-                        Directory.CreateDirectory(destinationDirectory);
-                    }
-
-                    entry.ExtractToFile(destinationPath, overwrite: true);
-                }
-
-                var percent = 80d + ((index + 1) / (double)totalEntries * 20d);
-                progress.Report(new InstallProgress(percent, false, TextId.StatusExtractingFormat, index + 1, totalEntries));
+                progress.Report(new InstallProgress(
+                    completedSteps / (double)totalSteps * 90d,
+                    false,
+                    TextId.StatusRemovingInstalledFilesFormat,
+                    completedSteps,
+                    totalSteps));
             }
         }, cancellationToken);
     }
@@ -538,6 +770,7 @@ public sealed class MainForm : Form
         _browseButton.Text = GetText(TextId.Browse);
         _refreshButton.Text = GetText(TextId.Refresh);
         _installButton.Text = GetText(TextId.Install);
+        _uninstallButton.Text = GetText(TextId.Uninstall);
         _exitButton.Text = GetText(TextId.Exit);
 
         UpdateModeDescription();
@@ -585,6 +818,8 @@ public sealed class MainForm : Form
             InstallerAppException { Kind: InstallerErrorKind.InvalidArchivePath } => GetText(TextId.InvalidArchivePath),
             InstallerAppException { Kind: InstallerErrorKind.GitHubEmptyPayload } => GetText(TextId.GitHubEmptyPayload),
             InstallerAppException { Kind: InstallerErrorKind.GitHubMissingAssets } => GetText(TextId.GitHubMissingAssets),
+            InstallerAppException { Kind: InstallerErrorKind.InvalidInstallState } => GetText(TextId.InvalidInstallState),
+            InstallerAppException { Kind: InstallerErrorKind.InvalidInstallStatePath } => GetText(TextId.InvalidInstallStatePath),
             _ => exception.Message
         };
     }
@@ -597,6 +832,244 @@ public sealed class MainForm : Form
     private string Format(TextId id, params object[] args)
     {
         return string.Format(_currentCulture, GetText(id), args);
+    }
+
+    private static InstallState BuildInstallState(
+        string installPath,
+        InstallState? existingState,
+        string releaseTag,
+        ExtractedContent extractedContent,
+        IReadOnlyList<ManagedExclusion> exclusions)
+    {
+        var installedFiles = new HashSet<string>(existingState?.InstalledFiles ?? [], StringComparer.OrdinalIgnoreCase);
+        foreach (var filePath in extractedContent.Files)
+        {
+            installedFiles.Add(NormalizeRelativeStatePath(Path.GetRelativePath(installPath, filePath)));
+        }
+
+        var installedDirectories = new HashSet<string>(existingState?.InstalledDirectories ?? [], StringComparer.OrdinalIgnoreCase);
+        foreach (var directoryPath in extractedContent.Directories)
+        {
+            var relativePath = NormalizeRelativeStatePath(Path.GetRelativePath(installPath, directoryPath));
+
+            if (!string.IsNullOrEmpty(relativePath))
+            {
+                installedDirectories.Add(relativePath);
+            }
+        }
+
+        foreach (var relativeFilePath in installedFiles)
+        {
+            var parentDirectory = Path.GetDirectoryName(relativeFilePath);
+
+            while (!string.IsNullOrWhiteSpace(parentDirectory) && parentDirectory != ".")
+            {
+                installedDirectories.Add(NormalizeRelativeStatePath(parentDirectory));
+                parentDirectory = Path.GetDirectoryName(parentDirectory);
+            }
+        }
+
+        var exclusionMap = new Dictionary<string, ManagedExclusion>(StringComparer.OrdinalIgnoreCase);
+
+        if (existingState is not null)
+        {
+            foreach (var exclusion in existingState.Exclusions)
+            {
+                exclusionMap[exclusion.Path] = exclusion;
+            }
+        }
+
+        foreach (var exclusion in exclusions)
+        {
+            if (exclusionMap.TryGetValue(exclusion.Path, out var existingExclusion) && existingExclusion.AddedByInstaller)
+            {
+                exclusionMap[exclusion.Path] = new ManagedExclusion(exclusion.Path, true);
+            }
+            else
+            {
+                exclusionMap[exclusion.Path] = exclusion;
+            }
+        }
+
+        var backupMap = new Dictionary<string, BackedUpFile>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var backedUpFile in existingState?.BackedUpFiles ?? [])
+        {
+            backupMap[NormalizeRelativeStatePath(backedUpFile.OriginalRelativePath)] = new BackedUpFile(
+                NormalizeRelativeStatePath(backedUpFile.OriginalRelativePath),
+                NormalizeRelativeStatePath(backedUpFile.BackupRelativePath));
+        }
+
+        foreach (var backedUpFile in extractedContent.BackedUpFiles)
+        {
+            backupMap[NormalizeRelativeStatePath(backedUpFile.OriginalRelativePath)] = new BackedUpFile(
+                NormalizeRelativeStatePath(backedUpFile.OriginalRelativePath),
+                NormalizeRelativeStatePath(backedUpFile.BackupRelativePath));
+        }
+
+        return new InstallState(
+            releaseTag,
+            DateTimeOffset.UtcNow,
+            installedFiles.OrderBy(path => path, StringComparer.OrdinalIgnoreCase).ToArray(),
+            installedDirectories.OrderBy(path => path, StringComparer.OrdinalIgnoreCase).ToArray(),
+            exclusionMap.Values.OrderBy(entry => entry.Path, StringComparer.OrdinalIgnoreCase).ToArray(),
+            backupMap.Values.OrderBy(entry => entry.OriginalRelativePath, StringComparer.OrdinalIgnoreCase).ToArray());
+    }
+
+    private static IReadOnlyList<string> CollectDirectoryPaths(InstallState state, string installRoot)
+    {
+        var directoryPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var relativeDirectoryPath in state.InstalledDirectories)
+        {
+            if (string.IsNullOrWhiteSpace(relativeDirectoryPath))
+            {
+                continue;
+            }
+
+            directoryPaths.Add(ResolveTrackedPath(installRoot, relativeDirectoryPath));
+        }
+
+        foreach (var relativeFilePath in state.InstalledFiles)
+        {
+            var relativeDirectory = Path.GetDirectoryName(relativeFilePath);
+
+            while (!string.IsNullOrWhiteSpace(relativeDirectory) && relativeDirectory != ".")
+            {
+                directoryPaths.Add(ResolveTrackedPath(installRoot, relativeDirectory));
+                relativeDirectory = Path.GetDirectoryName(relativeDirectory);
+            }
+        }
+
+        return directoryPaths
+            .OrderByDescending(path => path.Length)
+            .ThenByDescending(path => path, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static string ResolveTrackedPath(string installRoot, string relativePath)
+    {
+        var fullPath = Path.GetFullPath(Path.Combine(installRoot, relativePath));
+
+        if (!fullPath.StartsWith(installRoot, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InstallerAppException(InstallerErrorKind.InvalidInstallStatePath);
+        }
+
+        return fullPath;
+    }
+
+    private static string NormalizeRelativeStatePath(string relativePath)
+    {
+        if (relativePath == ".")
+        {
+            return string.Empty;
+        }
+
+        return relativePath.Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar);
+    }
+
+    private static void AddTrackedDirectory(ISet<string> directories, string installPath, string directoryPath)
+    {
+        var relativePath = NormalizeRelativeStatePath(Path.GetRelativePath(installPath, directoryPath));
+
+        if (!string.IsNullOrEmpty(relativePath))
+        {
+            directories.Add(Path.GetFullPath(directoryPath));
+        }
+    }
+
+    private static void BackupOriginalLauncherIfNeeded(
+        string installPath,
+        string relativeEntryPath,
+        string destinationPath,
+        ISet<string> trackedBackups,
+        ICollection<BackedUpFile> backedUpFiles)
+    {
+        if (!string.Equals(relativeEntryPath, "csgo.exe", StringComparison.OrdinalIgnoreCase) ||
+            trackedBackups.Contains(relativeEntryPath))
+        {
+            return;
+        }
+
+        var backupPath = Path.Combine(installPath, "csgo.exe.old");
+
+        if (!File.Exists(destinationPath))
+        {
+            return;
+        }
+
+        File.Move(destinationPath, backupPath);
+        trackedBackups.Add(relativeEntryPath);
+        backedUpFiles.Add(new BackedUpFile(relativeEntryPath, "csgo.exe.old"));
+    }
+
+    private static void RestoreBackedUpFile(string installRoot, BackedUpFile backedUpFile)
+    {
+        var originalPath = ResolveTrackedPath(installRoot, backedUpFile.OriginalRelativePath);
+        var backupPath = ResolveTrackedPath(installRoot, backedUpFile.BackupRelativePath);
+
+        if (!File.Exists(backupPath))
+        {
+            return;
+        }
+
+        var originalDirectory = Path.GetDirectoryName(originalPath);
+        if (!string.IsNullOrWhiteSpace(originalDirectory))
+        {
+            Directory.CreateDirectory(originalDirectory);
+        }
+
+        if (File.Exists(originalPath))
+        {
+            TryDeleteFile(originalPath);
+        }
+
+        File.Move(backupPath, originalPath);
+    }
+
+    private static void TryRestoreBackedUpFile(string installRoot, BackedUpFile backedUpFile)
+    {
+        try
+        {
+            RestoreBackedUpFile(installRoot, backedUpFile);
+        }
+        catch
+        {
+        }
+    }
+
+    private async Task TryRollbackExclusionsAsync(IEnumerable<string> paths)
+    {
+        try
+        {
+            await _defenderExclusionService.RemoveExclusionsAsync(paths);
+        }
+        catch
+        {
+        }
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        if (!File.Exists(path))
+        {
+            return;
+        }
+
+        try
+        {
+            var attributes = File.GetAttributes(path);
+            if ((attributes & FileAttributes.ReadOnly) != 0)
+            {
+                File.SetAttributes(path, attributes & ~FileAttributes.ReadOnly);
+            }
+        }
+        catch
+        {
+        }
+
+        File.Delete(path);
     }
 
     private static void TryDeleteDirectory(string path)
@@ -640,5 +1113,6 @@ public sealed class MainForm : Form
         Failed
     }
 
+    private sealed record ExtractedContent(IReadOnlyList<string> Files, IReadOnlyList<string> Directories, IReadOnlyList<BackedUpFile> BackedUpFiles);
     private readonly record struct InstallProgress(double Percent, bool IsIndeterminate, TextId StatusTextId, params object[] Arguments);
 }
