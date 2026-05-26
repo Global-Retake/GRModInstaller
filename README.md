@@ -17,6 +17,20 @@ Download the latest installer from the repository's `Releases` page.
 3. Confirm or change the install folder
 4. Let the installer download and extract the latest GRMod release
 
+## Screenshots
+
+### Main Window
+
+![Global Retake Installer main window](assets/screenshots/installer-home.png)
+
+### Download Progress
+
+![Global Retake Installer downloading the latest GRMod release](assets/screenshots/installer-options.png)
+
+### Completed Install
+
+![Global Retake Installer successful install dialog](assets/screenshots/installer-progress.png)
+
 ## Features
 
 - Downloads the latest GRMod release directly from `Skysion3/GRMod`
