@@ -6,11 +6,11 @@ Lightweight Windows installer for GRMod.
 
 ## Badges
 
-![Release](https://img.shields.io/github/v/release/ThatOneRicsi/GRModInstaller?style=for-the-badge)
-![Downloads](https://img.shields.io/github/downloads/ThatOneRicsi/GRModInstaller/total?style=for-the-badge)
-![Stars](https://img.shields.io/github/stars/ThatOneRicsi/GRModInstaller?style=for-the-badge)
-![Forks](https://img.shields.io/github/forks/ThatOneRicsi/GRModInstaller?style=for-the-badge)
-![Issues](https://img.shields.io/github/issues/ThatOneRicsi/GRModInstaller?style=for-the-badge)
+![Release](https://img.shields.io/github/v/release/Global-Retake/GRModInstaller?style=for-the-badge)
+![Downloads](https://img.shields.io/github/downloads/Global-Retake/GRModInstaller/total?style=for-the-badge)
+![Stars](https://img.shields.io/github/stars/Global-Retake/GRModInstaller?style=for-the-badge)
+![Forks](https://img.shields.io/github/forks/Global-Retake/GRModInstaller?style=for-the-badge)
+![Issues](https://img.shields.io/github/issues/Global-Retake/GRModInstaller?style=for-the-badge)
 ![Platform](https://img.shields.io/badge/platform-windows-0078D6?style=for-the-badge&logo=windows)
 
 ---
@@ -33,7 +33,7 @@ The installer automatically handles:
 
 Download the latest release:
 
-![Download](https://img.shields.io/badge/DOWNLOAD-LATEST%20RELEASE-2ea44f?style=for-the-badge&logo=windows)
+[![Download Latest Release](https://img.shields.io/badge/DOWNLOAD-LATEST%20RELEASE-2ea44f?style=for-the-badge&logo=windows)](https://github.com/Global-Retake/GRModInstaller/releases/latest)
 
 ---
 
@@ -126,6 +126,8 @@ Arabic, Bulgarian, Catalan, Chinese Simplified, Chinese Traditional, Croatian, C
 Join the official Discord server:
 
 [![Discord](https://img.shields.io/discord/1436143382723297350?cacheSeconds=60&style=for-the-badge&logo=discord&color=5865F2)](https://discord.gg/zawBAWuYEg)
+
+---
 
 ## Credits
 
