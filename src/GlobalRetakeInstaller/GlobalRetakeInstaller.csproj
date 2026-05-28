@@ -11,8 +11,11 @@
     <Product>Global Retake Installer</Product>
     <Company>Global Retake</Company>
     <Copyright>Copyright Global Retake, globalretake.com</Copyright>
-    <Version>1.1.3</Version>
-    <FileVersion>1.1.3</FileVersion>
+    <Version>1.1.4</Version>
+    <FileVersion>1.1.4</FileVersion>
     <UseWindowsForms>true</UseWindowsForms>
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
   </PropertyGroup>
 </Project>
