@@ -27,27 +27,32 @@ internal static class InstallStateStore
 
     public static bool Exists(string installPath)
     {
-        return File.Exists(GetStateFilePath(installPath)) || File.Exists(GetLegacyStateFilePath(installPath));
+        return File.Exists(GetStateFilePath(installPath)) ||
+               File.Exists(GetLocalAppDataStateFilePath(installPath)) ||
+               File.Exists(GetLegacyStateFilePath(installPath));
     }
 
     public static async Task<InstallState?> TryLoadAsync(string installPath, CancellationToken cancellationToken = default)
     {
-        var stateFilePath = GetStateFilePath(installPath);
-
-        if (!File.Exists(stateFilePath))
+        foreach (var stateFilePath in new[]
         {
-            stateFilePath = GetLegacyStateFilePath(installPath);
-
+            GetStateFilePath(installPath),
+            GetLocalAppDataStateFilePath(installPath),
+            GetLegacyStateFilePath(installPath)
+        })
+        {
             if (!File.Exists(stateFilePath))
             {
-                return null;
+                continue;
             }
+
+            await using var stream = new FileStream(stateFilePath, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, useAsync: true);
+            var state = await JsonSerializer.DeserializeAsync<InstallState>(stream, SerializerOptions, cancellationToken);
+
+            return state ?? throw new InstallerAppException(InstallerErrorKind.InvalidInstallState);
         }
 
-        await using var stream = new FileStream(stateFilePath, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, useAsync: true);
-        var state = await JsonSerializer.DeserializeAsync<InstallState>(stream, SerializerOptions, cancellationToken);
-
-        return state ?? throw new InstallerAppException(InstallerErrorKind.InvalidInstallState);
+        return null;
     }
 
     public static async Task SaveAsync(string installPath, InstallState state, CancellationToken cancellationToken = default)
@@ -65,7 +70,12 @@ internal static class InstallStateStore
 
     public static void Delete(string installPath)
     {
-        foreach (var stateFilePath in new[] { GetStateFilePath(installPath), GetLegacyStateFilePath(installPath) })
+        foreach (var stateFilePath in new[]
+        {
+            GetStateFilePath(installPath),
+            GetLocalAppDataStateFilePath(installPath),
+            GetLegacyStateFilePath(installPath)
+        })
         {
             if (File.Exists(stateFilePath))
             {
@@ -79,12 +89,29 @@ internal static class InstallStateStore
         return Path.Combine(GetStateDirectory(), $"{GetInstallPathHash(installPath)}.json");
     }
 
+    private static string GetLocalAppDataStateFilePath(string installPath)
+    {
+        return Path.Combine(GetLocalAppDataStateDirectory(), $"{GetInstallPathHash(installPath)}.json");
+    }
+
     private static string GetLegacyStateFilePath(string installPath)
     {
         return Path.Combine(Path.GetFullPath(installPath), StateFileName);
     }
 
     private static string GetStateDirectory()
+    {
+        var commonApplicationDataPath = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
+
+        if (string.IsNullOrWhiteSpace(commonApplicationDataPath))
+        {
+            commonApplicationDataPath = Path.GetTempPath();
+        }
+
+        return Path.Combine(commonApplicationDataPath, StateRootFolderName, StateFolderName);
+    }
+
+    private static string GetLocalAppDataStateDirectory()
     {
         var localApplicationDataPath = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
 
