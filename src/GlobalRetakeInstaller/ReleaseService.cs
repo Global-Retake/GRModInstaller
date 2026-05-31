@@ -21,7 +21,7 @@ public sealed class ReleaseService
 
     public async Task<ReleaseInfo> GetLatestReleaseAsync(CancellationToken cancellationToken = default)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Get, "https://api.github.com/repos/Skysion3/GRMod/releases/latest");
+        using var request = new HttpRequestMessage(HttpMethod.Get, "https://api.github.com/repos/Skysion3/GRModInstallFiles/releases/tags/continuous");
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
 
         using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
@@ -31,8 +31,8 @@ public sealed class ReleaseService
         var release = await JsonSerializer.DeserializeAsync<GitHubReleaseDto>(stream, SerializerOptions, cancellationToken)
             ?? throw new InstallerAppException(InstallerErrorKind.GitHubEmptyPayload);
 
-        var fullAsset = GetWindowsAsset(release.Assets, "_Full");
-        var patchAsset = GetWindowsAsset(release.Assets, "_Patch");
+        var fullAsset = GetWindowsAsset(release.Assets, "_Full-windows-latest");
+        var patchAsset = GetWindowsAsset(release.Assets, "_Patch-windows-latest");
 
         if (fullAsset is null || patchAsset is null)
         {
