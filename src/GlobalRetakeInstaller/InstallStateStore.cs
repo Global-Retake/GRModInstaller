@@ -1,3 +1,4 @@
+using Microsoft.Win32;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -17,8 +18,8 @@ internal sealed record BackedUpFile(string OriginalRelativePath, string BackupRe
 internal static class InstallStateStore
 {
     private const string StateFileName = ".grmod-installer-state.json";
-    private const string StateRootFolderName = "GlobalRetakeInstaller";
-    private const string StateFolderName = "InstallState";
+    private const string RegistryRootPath = @"Software\GlobalRetakeInstaller\InstallState";
+    private const string StateValueName = "StateJson";
 
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
@@ -27,24 +28,25 @@ internal static class InstallStateStore
 
     public static bool Exists(string installPath)
     {
-        return File.Exists(GetStateFilePath(installPath)) || File.Exists(GetLegacyStateFilePath(installPath));
+        return RegistryContainsState(installPath) ||
+               File.Exists(GetLegacyStateFilePath(installPath));
     }
 
     public static async Task<InstallState?> TryLoadAsync(string installPath, CancellationToken cancellationToken = default)
     {
-        var stateFilePath = GetStateFilePath(installPath);
-
-        if (!File.Exists(stateFilePath))
+        if (TryLoadFromRegistry(installPath, out var registryState))
         {
-            stateFilePath = GetLegacyStateFilePath(installPath);
-
-            if (!File.Exists(stateFilePath))
-            {
-                return null;
-            }
+            return registryState;
         }
 
-        await using var stream = new FileStream(stateFilePath, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, useAsync: true);
+        var legacyStateFilePath = GetLegacyStateFilePath(installPath);
+
+        if (!File.Exists(legacyStateFilePath))
+        {
+            return null;
+        }
+
+        await using var stream = new FileStream(legacyStateFilePath, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, useAsync: true);
         var state = await JsonSerializer.DeserializeAsync<InstallState>(stream, SerializerOptions, cancellationToken);
 
         return state ?? throw new InstallerAppException(InstallerErrorKind.InvalidInstallState);
@@ -52,31 +54,40 @@ internal static class InstallStateStore
 
     public static async Task SaveAsync(string installPath, InstallState state, CancellationToken cancellationToken = default)
     {
-        var stateFilePath = GetStateFilePath(installPath);
-        Directory.CreateDirectory(Path.GetDirectoryName(stateFilePath)!);
+        var stateJson = JsonSerializer.Serialize(state, SerializerOptions);
 
-        await using (var stream = new FileStream(stateFilePath, FileMode.Create, FileAccess.Write, FileShare.None, 4096, useAsync: true))
+        await Task.Run(() =>
         {
-            await JsonSerializer.SerializeAsync(stream, state, SerializerOptions, cancellationToken);
-        }
+            using var key = Registry.CurrentUser.CreateSubKey(GetRegistryKeyPath(installPath), writable: true)
+                ?? throw new InstallerAppException(InstallerErrorKind.InvalidInstallState);
 
-        TryHideStateFile(stateFilePath);
+            key.SetValue(StateValueName, stateJson, RegistryValueKind.String);
+        }, cancellationToken);
+
+        DeleteLegacyStateFile(installPath);
     }
 
     public static void Delete(string installPath)
     {
-        foreach (var stateFilePath in new[] { GetStateFilePath(installPath), GetLegacyStateFilePath(installPath) })
+        try
         {
-            if (File.Exists(stateFilePath))
-            {
-                File.Delete(stateFilePath);
-            }
+            using var key = Registry.CurrentUser.OpenSubKey(GetRegistryKeyPath(installPath), writable: true);
+            key?.DeleteValue(StateValueName, throwOnMissingValue: false);
         }
-    }
+        catch
+        {
+        }
 
-    public static string GetStateFilePath(string installPath)
-    {
-        return Path.Combine(GetStateDirectory(), $"{GetInstallPathHash(installPath)}.json");
+        try
+        {
+            using var rootKey = Registry.CurrentUser.OpenSubKey(RegistryRootPath, writable: true);
+            rootKey?.DeleteSubKeyTree(GetInstallPathHash(installPath), throwOnMissingSubKey: false);
+        }
+        catch
+        {
+        }
+
+        DeleteLegacyStateFile(installPath);
     }
 
     private static string GetLegacyStateFilePath(string installPath)
@@ -84,16 +95,51 @@ internal static class InstallStateStore
         return Path.Combine(Path.GetFullPath(installPath), StateFileName);
     }
 
-    private static string GetStateDirectory()
+    private static string GetRegistryKeyPath(string installPath)
     {
-        var localApplicationDataPath = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        return Path.Combine(RegistryRootPath, GetInstallPathHash(installPath));
+    }
 
-        if (string.IsNullOrWhiteSpace(localApplicationDataPath))
+    private static bool RegistryContainsState(string installPath)
+    {
+        try
         {
-            localApplicationDataPath = Path.GetTempPath();
+            using var key = Registry.CurrentUser.OpenSubKey(GetRegistryKeyPath(installPath), writable: false);
+            return key?.GetValue(StateValueName) is string { Length: > 0 };
         }
+        catch
+        {
+            return false;
+        }
+    }
 
-        return Path.Combine(localApplicationDataPath, StateRootFolderName, StateFolderName);
+    private static bool TryLoadFromRegistry(string installPath, out InstallState? state)
+    {
+        state = null;
+
+        try
+        {
+            using var key = Registry.CurrentUser.OpenSubKey(GetRegistryKeyPath(installPath), writable: false);
+            var stateJson = key?.GetValue(StateValueName) as string;
+
+            if (string.IsNullOrWhiteSpace(stateJson))
+            {
+                return false;
+            }
+
+            state = JsonSerializer.Deserialize<InstallState>(stateJson, SerializerOptions)
+                ?? throw new InstallerAppException(InstallerErrorKind.InvalidInstallState);
+
+            return true;
+        }
+        catch (InstallerAppException)
+        {
+            throw;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static string GetInstallPathHash(string installPath)
@@ -106,11 +152,15 @@ internal static class InstallStateStore
         return Convert.ToHexString(hashBytes);
     }
 
-    private static void TryHideStateFile(string stateFilePath)
+    private static void DeleteLegacyStateFile(string installPath)
     {
         try
         {
-            File.SetAttributes(stateFilePath, FileAttributes.Hidden | FileAttributes.NotContentIndexed);
+            var legacyStateFilePath = GetLegacyStateFilePath(installPath);
+            if (File.Exists(legacyStateFilePath))
+            {
+                File.Delete(legacyStateFilePath);
+            }
         }
         catch
         {

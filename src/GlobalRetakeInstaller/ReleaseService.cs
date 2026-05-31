@@ -31,13 +31,8 @@ public sealed class ReleaseService
         var release = await JsonSerializer.DeserializeAsync<GitHubReleaseDto>(stream, SerializerOptions, cancellationToken)
             ?? throw new InstallerAppException(InstallerErrorKind.GitHubEmptyPayload);
 
-        var fullAsset = release.Assets.FirstOrDefault(asset =>
-            asset.Name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) &&
-            asset.Name.Contains("_Full", StringComparison.OrdinalIgnoreCase));
-
-        var patchAsset = release.Assets.FirstOrDefault(asset =>
-            asset.Name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) &&
-            asset.Name.Contains("_Patch", StringComparison.OrdinalIgnoreCase));
+        var fullAsset = GetWindowsAsset(release.Assets, "_Full");
+        var patchAsset = GetWindowsAsset(release.Assets, "_Patch");
 
         if (fullAsset is null || patchAsset is null)
         {
@@ -50,6 +45,16 @@ public sealed class ReleaseService
             release.PublishedAt,
             new ReleaseAsset(fullAsset.Name, fullAsset.BrowserDownloadUrl, fullAsset.Size),
             new ReleaseAsset(patchAsset.Name, patchAsset.BrowserDownloadUrl, patchAsset.Size));
+    }
+
+    private static GitHubAssetDto GetWindowsAsset(IEnumerable<GitHubAssetDto> assets, string releaseTypeToken)
+    {
+        var windowsAsset = assets.FirstOrDefault(asset =>
+            asset.Name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) &&
+            asset.Name.Contains(releaseTypeToken, StringComparison.OrdinalIgnoreCase) &&
+            asset.Name.Contains("windows", StringComparison.OrdinalIgnoreCase));
+
+        return windowsAsset ?? throw new InstallerAppException(InstallerErrorKind.GitHubMissingAssets);
     }
 
     private sealed class GitHubReleaseDto
