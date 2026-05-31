@@ -21,7 +21,7 @@ public sealed class ReleaseService
 
     public async Task<ReleaseInfo> GetLatestReleaseAsync(CancellationToken cancellationToken = default)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Get, "https://api.github.com/repos/Skysion3/GRMod/releases/tag/csgo_continuous_grmod_test/");
+        using var request = new HttpRequestMessage(HttpMethod.Get, "https://api.github.com/repos/Skysion3/GRMod/releases/tags/csgo_continuous_grmod_test");
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
 
         using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
