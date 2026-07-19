@@ -7,6 +7,12 @@ internal sealed record ManagedExclusion(string Path, bool AddedByInstaller);
 
 internal sealed class DefenderExclusionService
 {
+    public async Task<bool> IsDefenderAvailableAsync(CancellationToken cancellationToken = default)
+    {
+        var output = await RunPowerShellScriptAsync(BuildAvailabilityScript(), cancellationToken);
+        return bool.TryParse(output.Trim(), out var isAvailable) && isAvailable;
+    }
+
     public async Task<IReadOnlyList<ManagedExclusion>> EnsureExcludedAsync(IEnumerable<string> paths, CancellationToken cancellationToken = default)
     {
         var normalizedPaths = NormalizeUniquePaths(paths);
@@ -44,7 +50,22 @@ internal sealed class DefenderExclusionService
             return;
         }
 
+        if (!await IsDefenderAvailableAsync(cancellationToken))
+        {
+            return;
+        }
+
         await RunPowerShellScriptAsync(BuildRemoveScript(normalizedPaths), cancellationToken);
+    }
+
+    private static string BuildAvailabilityScript()
+    {
+        return """
+$hasGet = $null -ne (Get-Command Get-MpPreference -ErrorAction SilentlyContinue)
+$hasAdd = $null -ne (Get-Command Add-MpPreference -ErrorAction SilentlyContinue)
+$hasRemove = $null -ne (Get-Command Remove-MpPreference -ErrorAction SilentlyContinue)
+Write-Output ($hasGet -and $hasAdd -and $hasRemove)
+""";
     }
 
     private static async Task<IReadOnlyList<string>> GetExcludedPathsAsync(CancellationToken cancellationToken)

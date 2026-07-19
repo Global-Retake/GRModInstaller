@@ -17,7 +17,7 @@ Lightweight Windows installer for GRMod.
 
 ## Overview
 
-A lightweight Windows installer for [GRMod](https://github.com/Skysion3/GRMod).
+A lightweight Windows installer for [GRMod](https://github.com/itsIlluMinAty/GRMod).
 
 GRMod brings back the 2023 experience to CSGO!
 
@@ -44,7 +44,9 @@ Download the latest release:
    - Full install
    - Patch update
 3. Choose installation directory
-4. Confirm Microsoft Defender exclusions
+4. Confirm antivirus exclusions
+   - If Microsoft Defender is available, exclusions are configured automatically.
+   - If another antivirus is detected, follow the prompt to disable AV temporarily, add the selected CS:GO folder to exclusions, then continue.
 5. Wait for download and extraction to complete
 
 ---
@@ -82,7 +84,7 @@ The uninstaller will:
 - Full install and patch update support
 - Default CS:GO Legacy path detection
 - Custom install directory support
-- Microsoft Defender exclusion handling
+- Microsoft Defender exclusion handling with manual antivirus fallback
 - Safe file extraction into target directory
 - Backup system for `csgo.exe` (`csgo.exe.old`)
 - Built-in uninstaller with rollback support
@@ -131,7 +133,7 @@ Join the official Discord server:
 
 ## Credits
 
-- GRMod by Skysion3: https://github.com/Skysion3/GRMod
+- GRMod by itsIlluMinAty: https://github.com/itsIlluMinAty/GRMod
 - csgo_gc by Mikko Kokko: https://github.com/mikkokko/csgo_gc
 
 ---

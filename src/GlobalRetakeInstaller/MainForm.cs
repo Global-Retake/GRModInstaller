@@ -353,9 +353,27 @@ public sealed class MainForm : Form
             Directory.CreateDirectory(installPath);
 
             SetStatus(TextId.StatusConfiguringExclusions, true, 0);
-            var managedExclusions = (await _defenderExclusionService
-                    .EnsureExcludedAsync([installPath, InstallerTempBasePath]))
-                .ToArray();
+            ManagedExclusion[] managedExclusions;
+
+            if (await _defenderExclusionService.IsDefenderAvailableAsync())
+            {
+                managedExclusions = (await _defenderExclusionService
+                        .EnsureExcludedAsync([installPath, InstallerTempBasePath]))
+                    .ToArray();
+            }
+            else
+            {
+                SetStatus(TextId.StatusManualExclusionRequired, true, 0);
+
+                if (!PromptForManualAntivirusExclusions(installPath))
+                {
+                    SetBusyState(false, TextId.StatusReady, false, 0);
+                    return;
+                }
+
+                managedExclusions = [];
+            }
+
             rollbackExclusions = managedExclusions
                 .Where(exclusion => exclusion.AddedByInstaller)
                 .Select(exclusion => exclusion.Path)
@@ -487,6 +505,17 @@ public sealed class MainForm : Form
     private void UpdateProgress(InstallProgress progress)
     {
         SetStatus(progress.StatusTextId, progress.IsIndeterminate, (int)Math.Round(progress.Percent), progress.Arguments);
+    }
+
+    private bool PromptForManualAntivirusExclusions(string installPath)
+    {
+        return MessageBox.Show(
+            this,
+            Format(TextId.DefenderUnavailableDialogFormat, installPath),
+            GetText(TextId.DefenderUnavailableTitle),
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Warning,
+            MessageBoxDefaultButton.Button2) == DialogResult.Yes;
     }
 
     private void SetBusyState(bool isBusy, TextId statusTextId, bool indeterminate, int progressPercent, params object[] args)

@@ -11,8 +11,8 @@
     <Product>Global Retake Installer</Product>
     <Company>Global Retake</Company>
     <Copyright>Copyright Global Retake, globalretake.com</Copyright>
-    <Version>1.1.7</Version>
-    <FileVersion>1.1.7</FileVersion>
+    <Version>1.1.8</Version>
+    <FileVersion>1.1.8</FileVersion>
     <UseWindowsForms>true</UseWindowsForms>
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>
