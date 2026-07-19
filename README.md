@@ -140,11 +140,11 @@ Join the official Discord server:
 
 ## License
 
-Source-available project.
+This project is licensed under MIT with Commons Clause.
 
-You may use, modify, and distribute it.
+You may use, modify, and redistribute it under the license terms.
 
-Commercial redistribution is not permitted.
+Selling the software, or paid distribution where value is primarily derived from this software, is not permitted.
 
 See LICENSE for full details.
 
